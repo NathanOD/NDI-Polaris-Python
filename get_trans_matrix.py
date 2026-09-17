@@ -13,7 +13,7 @@ ROMS_DIR = os.path.join(os.path.dirname(__file__), "roms")
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Compute the rigid transform between the sensor and table frames."
+        description="Compute the rigid transform between the sensor and world frames."
     )
     parser.add_argument("--host", required=True, help="Polaris host address")
     parser.add_argument("--port", type=int, required=True, help="Polaris port")
@@ -26,19 +26,19 @@ def parse_args():
         "port to report stray markers at all); this tool's own tracked pose is never read.",
     )
     parser.add_argument(
-        "--table-positions-csv",
-        default=os.path.join(os.path.dirname(__file__), "table_positions.csv"),
-        help="CSV file with the table's known marker positions (default: %(default)s)",
+        "--world-positions-csv",
+        default=os.path.join(os.path.dirname(__file__), "world_positions.csv"),
+        help="CSV file with the known marker positions in the world frame (default: %(default)s)",
     )
     parser.add_argument(
         "--output-path",
-        default=os.path.join(os.path.dirname(__file__), "sensor_to_table_transform"),
+        default=os.path.join(os.path.dirname(__file__), "sensor_to_world_transform"),
         help="Output path (without extension) for the computed transform (default: %(default)s)",
     )
     return parser.parse_args()
 
 
-def load_table_positions(csv_path):
+def load_world_positions(csv_path):
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
         return np.array(
@@ -46,22 +46,22 @@ def load_table_positions(csv_path):
         )
 
 
-def match_points(table_points, sensor_points):
-    """Finds which detected sensor point corresponds to which table row.
+def match_points(world_points, sensor_points):
+    """Finds which detected sensor point corresponds to which world row.
 
     The Polaris reports stray markers in arbitrary detection order, so
     correspondence is recovered by finding the permutation of sensor points
-    whose pairwise distances best match the table points' pairwise distances
+    whose pairwise distances best match the world points' pairwise distances
     -- those distances are invariant to the rigid transform being solved for.
     """
-    n = len(table_points)
-    table_dists = np.linalg.norm(table_points[:, None] - table_points[None, :], axis=-1)
+    n = len(world_points)
+    world_dists = np.linalg.norm(world_points[:, None] - world_points[None, :], axis=-1)
 
     best_perm, best_cost = list(range(n)), np.inf
     for perm in itertools.permutations(range(n)):
         candidate = sensor_points[list(perm)]
         cand_dists = np.linalg.norm(candidate[:, None] - candidate[None, :], axis=-1)
-        cost = np.sum((cand_dists - table_dists) ** 2)
+        cost = np.sum((cand_dists - world_dists) ** 2)
         if cost < best_cost:
             best_cost, best_perm = cost, list(perm)
     return best_perm, best_cost
@@ -86,7 +86,7 @@ def rigid_transform(source_points, target_points):
 
 def main():
     args = parse_args()
-    table_points = load_table_positions(args.table_positions_csv)
+    world_points = load_world_positions(args.world_positions_csv)
     rom_path = os.path.join(ROMS_DIR, args.rom)
     if not os.path.isfile(rom_path):
         print(f"ROM file not found: {rom_path}")
@@ -109,44 +109,44 @@ def main():
         tool_transform = positions.get(args.rom)
         tool_pos_sensor = np.array(tool_transform[4:7]) if tool_transform is not None else None
 
-        print(f"Captured {len(stray)} marker(s), expected {len(table_points)}.")
-        if len(stray) != len(table_points):
+        print(f"Captured {len(stray)} marker(s), expected {len(world_points)}.")
+        if len(stray) != len(world_points):
             print(
-                "Marker count mismatch -- make sure only the table's markers are "
+                "Marker count mismatch -- make sure only the world markers are "
                 "visible to the camera (no other reflective spheres) and try again."
             )
             return
 
         sensor_points = np.array(stray)
-        perm, cost = match_points(table_points, sensor_points)
+        perm, cost = match_points(world_points, sensor_points)
         matched_sensor_points = sensor_points[perm]
 
-        print("Matched correspondences (table row <-> sensor point):")
-        for i, (tp, sp) in enumerate(zip(table_points, matched_sensor_points)):
-            print(f"  table[{i}] {tp} <-> sensor {sp}")
+        print("Matched correspondences (world row <-> sensor point):")
+        for i, (wp, sp) in enumerate(zip(world_points, matched_sensor_points)):
+            print(f"  world[{i}] {wp} <-> sensor {sp}")
         print(f"Matching cost (pairwise-distance residual, mm^2): {cost:.4f}")
 
-        T_table_from_sensor = rigid_transform(matched_sensor_points, table_points)
-        T_sensor_from_table = np.linalg.inv(T_table_from_sensor)
+        T_world_from_sensor = rigid_transform(matched_sensor_points, world_points)
+        T_sensor_from_world = np.linalg.inv(T_world_from_sensor)
 
-        predicted = (T_table_from_sensor[:3, :3] @ matched_sensor_points.T).T + T_table_from_sensor[:3, 3]
-        rmse = np.sqrt(np.mean(np.sum((predicted - table_points) ** 2, axis=1)))
+        predicted = (T_world_from_sensor[:3, :3] @ matched_sensor_points.T).T + T_world_from_sensor[:3, 3]
+        rmse = np.sqrt(np.mean(np.sum((predicted - world_points) ** 2, axis=1)))
         print(f"Registration RMSE: {rmse:.3f} mm")
 
         np.set_printoptions(precision=6, suppress=True)
-        print("\nT_table_from_sensor (maps a point from the sensor frame to the table frame):")
-        print(T_table_from_sensor)
-        print("\nT_sensor_from_table (maps a point from the table frame to the sensor frame):")
-        print(T_sensor_from_table)
+        print("\nT_world_from_sensor (maps a point from the sensor frame to the world frame):")
+        print(T_world_from_sensor)
+        print("\nT_sensor_from_world (maps a point from the world frame to the sensor frame):")
+        print(T_sensor_from_world)
 
-        np.savetxt(args.output_path + ".txt", T_table_from_sensor, fmt="%.6f")
-        print(f"\nSaved T_table_from_sensor to {args.output_path}.txt")
+        np.savetxt(args.output_path + ".txt", T_world_from_sensor, fmt="%.6f")
+        print(f"\nSaved T_world_from_sensor to {args.output_path}.txt")
 
         if tool_pos_sensor is not None:
-            tool_pos_table = T_table_from_sensor[:3, :3] @ tool_pos_sensor + T_table_from_sensor[:3, 3]
+            tool_pos_world = T_world_from_sensor[:3, :3] @ tool_pos_sensor + T_world_from_sensor[:3, 3]
             print(
-                f"\n{args.rom} position in the table frame (verification): "
-                f"({tool_pos_table[0]:.2f}, {tool_pos_table[1]:.2f}, {tool_pos_table[2]:.2f}) mm"
+                f"\n{args.rom} position in the world frame (verification): "
+                f"({tool_pos_world[0]:.2f}, {tool_pos_world[1]:.2f}, {tool_pos_world[2]:.2f}) mm"
             )
         else:
             print(f"\n{args.rom} was out of camera view during the capture -- no verification position.")

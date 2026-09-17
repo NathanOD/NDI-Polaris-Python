@@ -41,10 +41,10 @@ Same as above, but writes every frame to a CSV file (same ROM constraint applies
 python record_markers.py --host <IP> --port <PORT> --rom <ROM_FILE_1> --duration 15 --frequency 30 --output-csv scan.csv
 ```
 
-### Compute the sensor-to-table transform
+### Compute the sensor-to-world transform
 
-Place markers in the field of view, note their positions in a CSV file, then compute the rigid transform between the sensor and table frames.
+Place markers in the field of view, note their positions in a CSV file, then compute the rigid transform between the sensor and world frames.
 
 ```shell
-python get_trans_matrix.py --host <IP> --port <PORT> --rom <ROM_FILE_1> --table-positions-csv positions.csv --output-path transformation
+python get_trans_matrix.py --host <IP> --port <PORT> --rom <ROM_FILE_1> --world-positions-csv positions.csv --output-path transformation
 ```
